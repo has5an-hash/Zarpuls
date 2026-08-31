@@ -1,0 +1,29 @@
+name: Ronora remote check
+
+on:
+  push:
+    branches: [ronora-remote-check]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Ronora endpoints
+        shell: bash
+        run: |
+          set -u
+          UA='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36'
+          for url in \
+            'https://ronora.site.je/' \
+            'https://ronora.site.je/wp-login.php' \
+            'https://ronora.site.je/wp-json/' \
+            'https://ronora.site.je/ronora-postinstall.php' \
+            'https://ronora.site.je/ronora-bootstrap.php'; do
+            echo "===== $url ====="
+            curl -sS -L --max-time 25 -A "$UA" -o /tmp/body -D /tmp/headers "$url" || true
+            head -n 20 /tmp/headers || true
+            echo '--- body marker ---'
+            head -c 700 /tmp/body | tr '\n' ' ' || true
+            echo
+          done
