@@ -1,0 +1,93 @@
+name: Ronora secure bridge
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  BRIDGE_TITLE: RONORA-BRIDGE
+
+jobs:
+  bridge:
+    if: startsWith(github.event.issue.title, 'RONORA-BRIDGE')
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Generate ephemeral key and wait for encrypted command
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ISSUE: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out /tmp/ronora-private.pem >/dev/null 2>&1
+          openssl pkey -in /tmp/ronora-private.pem -pubout -out /tmp/ronora-public.pem >/dev/null 2>&1
+          PUB=$(base64 -w0 /tmp/ronora-public.pem)
+          gh api -X POST "repos/$REPO/issues/$ISSUE/comments" -f body="RONORA_PUBLIC_KEY=$PUB" >/dev/null
+          echo "Ephemeral public key published. Waiting for encrypted command..."
+          ENC=''
+          for i in $(seq 1 180); do
+            BODY=$(gh api "repos/$REPO/issues/$ISSUE" --jq .body)
+            ENC=$(printf '%s\n' "$BODY" | sed -n 's/^RONORA_ENC=//p' | head -n1)
+            if [ -n "$ENC" ]; then break; fi
+            sleep 5
+          done
+          if [ -z "$ENC" ]; then echo 'Timed out waiting for encrypted payload.'; exit 20; fi
+          printf '%s' "$ENC" | base64 -d > /tmp/secret.bin
+          openssl pkeyutl -decrypt -inkey /tmp/ronora-private.pem -in /tmp/secret.bin -out /tmp/secret.json -pkeyopt rsa_padding_mode:oaep -pkeyopt rsa_oaep_md:sha256 -pkeyopt rsa_mgf1_md:sha256
+          FTP_USER=$(jq -r .ftp_user /tmp/secret.json)
+          FTP_PASS=$(jq -r .ftp_pass /tmp/secret.json)
+          PAYLOAD_PASS=$(jq -r .payload_pass /tmp/secret.json)
+          DEPLOY_TOKEN=$(jq -r .deploy_token /tmp/secret.json)
+          FTP_HOST=$(jq -r '.ftp_host // "ftpupload.net"' /tmp/secret.json)
+          echo "::add-mask::$FTP_USER"
+          echo "::add-mask::$FTP_PASS"
+          echo "::add-mask::$PAYLOAD_PASS"
+          echo "::add-mask::$DEPLOY_TOKEN"
+          base64 -d bridge/ronora-deploy.enc.b64 > /tmp/ronora-deploy.enc
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 250000 -md sha256 -in /tmp/ronora-deploy.enc -out /tmp/ronora-deploy.php -pass pass:"$PAYLOAD_PASS"
+          python3 - <<'PY'
+          import ftplib, os
+          host=os.environ['FTP_HOST']; user=os.environ['FTP_USER']; password=os.environ['FTP_PASS']
+          ftp=ftplib.FTP(host, timeout=35)
+          ftp.login(user, password)
+          ftp.set_pasv(True)
+          try: ftp.cwd('/htdocs')
+          except Exception: ftp.cwd('htdocs')
+          with open('/tmp/ronora-deploy.php','rb') as f:
+              ftp.storbinary('STOR ronora-deploy.php',f)
+          ftp.quit()
+          print('FTP upload completed')
+          PY
+          RES=$(curl -fsS -L --max-time 120 --retry 2 --retry-delay 3 -A 'Mozilla/5.0 RonoraDeploy/1.0' "https://ronora.site.je/ronora-deploy.php?token=$DEPLOY_TOKEN&action=install")
+          echo "$RES" > /tmp/install-result.json
+          jq -e '.ok == true' /tmp/install-result.json >/dev/null
+          echo 'Remote installer completed successfully.'
+          curl -fsS -L --max-time 40 -A 'Mozilla/5.0 RonoraQA/1.0' 'https://ronora.site.je/' -o /tmp/home.html
+          grep -qi 'RONORA\|رونورا' /tmp/home.html
+          echo 'Homepage contains Ronora marker.'
+          python3 - <<'PY'
+          import ftplib, os
+          ftp=ftplib.FTP(os.environ['FTP_HOST'], timeout=35)
+          ftp.login(os.environ['FTP_USER'], os.environ['FTP_PASS'])
+          ftp.set_pasv(True)
+          try: ftp.cwd('/htdocs')
+          except Exception: ftp.cwd('htdocs')
+          try: ftp.delete('ronora-deploy.php')
+          except Exception as e: print('Cleanup warning:', e)
+          ftp.quit()
+          PY
+          SUMMARY=$(jq -c '{theme:.theme,author:.author,home:.home,counts:.counts}' /tmp/install-result.json)
+          gh api -X POST "repos/$REPO/issues/$ISSUE/comments" -f body="RONORA_DEPLOY_OK=$SUMMARY" >/dev/null
+        env:
+          FTP_HOST: ${{ env.FTP_HOST }}
+          FTP_USER: ${{ env.FTP_USER }}
+          FTP_PASS: ${{ env.FTP_PASS }}
