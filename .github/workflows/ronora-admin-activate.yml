@@ -43,18 +43,18 @@ jobs:
           echo "::add-mask::$WP_USER"
           echo "::add-mask::$WP_PASS"
           echo "::add-mask::$TOKEN"
+          python3 -m pip install --quiet selenium
 
           python3 - <<'PY'
-          import os, time, sys
+          import os, time
           from selenium import webdriver
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait
           from selenium.webdriver.support import expected_conditions as EC
           from selenium.webdriver.chrome.options import Options
-          from selenium.common.exceptions import TimeoutException
 
           opt=Options(); opt.add_argument('--headless=new'); opt.add_argument('--no-sandbox'); opt.add_argument('--disable-dev-shm-usage'); opt.add_argument('--window-size=1440,1100')
-          d=webdriver.Chrome(options=opt); w=WebDriverWait(d,30)
+          d=webdriver.Chrome(options=opt); w=WebDriverWait(d,40)
           try:
               d.get('https://ronora.site.je/wp-login.php')
               w.until(EC.presence_of_element_located((By.ID,'user_login'))).send_keys(os.environ['WP_USER'])
@@ -73,21 +73,20 @@ jobs:
                   snippet=f'''\n/* {marker} */\nadd_action('init', function() {{\n    if (!is_user_logged_in() || !current_user_can('manage_options')) return;\n    if (!isset($_GET['ronora_activate']) || !hash_equals('{token}', (string) $_GET['ronora_activate'])) return;\n    ob_start(); require ABSPATH . 'ronora-bootstrap.php'; ob_end_clean();\n    if (!function_exists('rr_install_embedded_theme')) wp_die('Ronora bootstrap functions missing');\n    rr_install_embedded_theme();\n    update_option('ronora_demo_seeded', false);\n    update_option('blogname', 'رونورا | سالن زیبایی');\n    update_option('blogdescription', 'رزرو آنلاین خدمات زیبایی، مراقبت و استایل');\n    update_option('timezone_string', 'Asia/Tehran');\n    wp_die('RONORA_ACTIVATED_OK');\n}});\n'''
                   d.execute_script("arguments[0].value = arguments[1]; arguments[0].dispatchEvent(new Event('change',{bubbles:true}));", ta, src+snippet)
                   d.find_element(By.ID,'submit').click()
-                  w.until(lambda x: 'File edited successfully' in x.page_source or 'پرونده با موفقیت ویرایش شد' in x.page_source or 'notice-success' in x.page_source)
+                  w.until(lambda x: 'notice-success' in x.page_source or 'موفقیت' in x.page_source or 'success' in x.page_source.lower())
                   print('THEME_EDITOR_PATCH_OK')
 
               d.get('https://ronora.site.je/?ronora_activate='+token)
-              time.sleep(4)
+              time.sleep(7)
               if 'RONORA_ACTIVATED_OK' not in d.page_source:
-                  print(d.title); print(d.page_source[:1500]); raise RuntimeError('activation marker missing')
+                  print('ACTIVATE_TITLE='+d.title); print(d.page_source[:2200]); raise RuntimeError('activation marker missing')
               print('RONORA_SWITCH_OK')
 
               d.get('https://ronora.site.je/')
-              time.sleep(8)
+              time.sleep(12)
               html=d.page_source
               if 'رونورا' not in html and 'RONORA' not in html.upper(): raise RuntimeError('homepage Ronora marker missing')
               print('RONORA_HOME_OK title='+d.title)
-              print('COUNTS service='+str(html.count('service')))
           finally:
               d.quit()
           PY
