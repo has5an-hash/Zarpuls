@@ -8,9 +8,6 @@ permissions:
   contents: read
   issues: write
 
-env:
-  BRIDGE_TITLE: RONORA-BRIDGE
-
 jobs:
   bridge:
     if: startsWith(github.event.issue.title, 'RONORA-BRIDGE')
@@ -48,6 +45,7 @@ jobs:
           PAYLOAD_PASS=$(jq -r .payload_pass /tmp/secret.json)
           DEPLOY_TOKEN=$(jq -r .deploy_token /tmp/secret.json)
           FTP_HOST=$(jq -r '.ftp_host // "ftpupload.net"' /tmp/secret.json)
+          export FTP_USER FTP_PASS PAYLOAD_PASS DEPLOY_TOKEN FTP_HOST
           echo "::add-mask::$FTP_USER"
           echo "::add-mask::$FTP_PASS"
           echo "::add-mask::$PAYLOAD_PASS"
@@ -87,7 +85,3 @@ jobs:
           PY
           SUMMARY=$(jq -c '{theme:.theme,author:.author,home:.home,counts:.counts}' /tmp/install-result.json)
           gh api -X POST "repos/$REPO/issues/$ISSUE/comments" -f body="RONORA_DEPLOY_OK=$SUMMARY" >/dev/null
-        env:
-          FTP_HOST: ${{ env.FTP_HOST }}
-          FTP_USER: ${{ env.FTP_USER }}
-          FTP_PASS: ${{ env.FTP_PASS }}
